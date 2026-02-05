@@ -695,7 +695,7 @@ with tabs[3]:
 
         st.markdown("### Factor exposure heatmap")
         heat = out[["Beta MKT", "Beta SMB", "Beta HML"]].copy()
-        st.dataframe(heat.style.background_gradient(axis=None), use_container_width=True)
+        st.dataframe(heat, use_container_width=True)
         st.caption(
             "Provides a visual summary of factor loadings across stocks, making patterns and clustering of risk exposures easy to identify."
         )
