@@ -1,20 +1,21 @@
 # app.py
 # ------------------------------------------------------------
-# FF3 Risk + Factor Analytics (Daily) using LOCAL FILES
+# FF3 Risk + Factor Analytics (Daily) using repo-relative LOCAL FILES
 #
-# Uses:
-#   - Local Ken French daily FF3 file:
-#       /Users/prashamanmainali/Documents/Streamlit app /DATA/F-F_Research_Data_Factors_daily.csv
-#   - Local S&P 500 tickers list:
-#       /Users/prashamanmainali/Documents/Streamlit app /DATA/SP500.csv
-#   - yfinance for daily adjusted prices
+# Expected repo structure:
+#   app.py
+#   requirements.txt
+#   DATA/
+#     F-F_Research_Data_Factors_daily.csv
+#     SP500.csv
 #
-# Run (IMPORTANT):
+# Run locally:
 #   streamlit run app.py
 # ------------------------------------------------------------
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -24,10 +25,13 @@ import streamlit as st
 import yfinance as yf
 
 # ----------------------------
-# Local file paths (YOUR MAC PATHS)
+# Repo-relative paths (DEPLOY-SAFE)
 # ----------------------------
-FF3_DAILY_PATH = "/Users/prashamanmainali/Documents/Streamlit app /DATA/F-F_Research_Data_Factors_daily.csv"
-SP500_PATH = "/Users/prashamanmainali/Documents/Streamlit app /DATA/SP500.csv"
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "DATA"
+
+FF3_DAILY_PATH = DATA_DIR / "F-F_Research_Data_Factors_daily.csv"
+SP500_PATH = DATA_DIR / "SP500.csv"
 
 # ----------------------------
 # Analysis window controls
@@ -39,12 +43,12 @@ END_DATE = "2025-12-31"  # cap analysis at end of 2025
 # ----------------------------
 st.set_page_config(page_title="FF3 (Daily) — Risk + Factor Analytics", page_icon="📈", layout="wide")
 
-DEFAULT_TICKERS = ["KO", "AAPL", "ABBV"]  # NVDA removed, AAPL added
+DEFAULT_TICKERS = ["KO", "AAPL", "ABBV"]
 DEFAULT_BENCH = "SPY"
 
 TRADING_DAYS = 252
-ROLLING_WINDOW_DEFAULT = 252  # ~1 trading year
-MIN_OBS_FOR_REG = 252  # require at least ~1 year daily data for regression
+ROLLING_WINDOW_DEFAULT = 252
+MIN_OBS_FOR_REG = 252
 
 
 # ----------------------------
@@ -119,7 +123,7 @@ def hist_var_cvar(r: pd.Series, alpha: float = 0.05) -> Tuple[float, float]:
 # Loaders (LOCAL)
 # ----------------------------
 @st.cache_data(show_spinner=False)
-def load_sp500_tickers_from_file(path: str) -> List[str]:
+def load_sp500_tickers_from_file(path: Path) -> List[str]:
     """
     Accepts columns: Symbol / Ticker / or first column fallback.
     Normalizes to Yahoo format (BRK.B -> BRK-B).
@@ -145,12 +149,11 @@ def load_sp500_tickers_from_file(path: str) -> List[str]:
         .unique()
         .tolist()
     )
-
     return sorted(tickers)
 
 
 @st.cache_data(show_spinner=False)
-def load_ff3_daily_from_kf_csv(path: str) -> pd.DataFrame:
+def load_ff3_daily_from_kf_csv(path: Path) -> pd.DataFrame:
     """
     Loads DAILY FF3 from Ken French CSV that contains headers/notes + a table.
 
@@ -177,7 +180,6 @@ def load_ff3_daily_from_kf_csv(path: str) -> pd.DataFrame:
 
     start = header_idx + 1
 
-    # End at first blank line after the daily table
     end = None
     for i in range(start, len(lines)):
         if lines[i].strip() == "":
@@ -203,7 +205,7 @@ def load_ff3_daily_from_kf_csv(path: str) -> pd.DataFrame:
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def load_prices_daily_adjclose(tickers: Tuple[str, ...], start: str, end: str) -> pd.DataFrame:
     """
-    Downloads daily adjusted close using yfinance auto_adjust=True.
+    Downloads daily close using yfinance auto_adjust=True.
     """
     raw = yf.download(list(tickers), start=start, end=end, auto_adjust=True, progress=False)
     if raw is None or raw.empty:
@@ -250,11 +252,6 @@ class FF3Result:
 def run_ff3_regression_daily(
     asset_ret_d: pd.Series, ff3_d: pd.DataFrame
 ) -> Tuple[Optional[FF3Result], Optional[sm.regression.linear_model.RegressionResultsWrapper], pd.DataFrame]:
-    """
-    Model:
-      Ri - RF = alpha + b_m(Mkt-RF) + b_s(SMB) + b_h(HML) + eps
-    All are DAILY returns in decimals.
-    """
     df = pd.concat([asset_ret_d.rename("Ri"), ff3_d], axis=1).dropna()
     if df.shape[0] < MIN_OBS_FOR_REG:
         return None, None, df
@@ -319,8 +316,7 @@ def rolling_ff3_daily(asset_ret_d: pd.Series, ff3_d: pd.DataFrame, window: int) 
         except Exception:
             out.append({"Date": idx[i], "alpha": np.nan, "beta_mkt": np.nan, "beta_smb": np.nan, "beta_hml": np.nan, "r2": np.nan})
 
-    df_out = pd.DataFrame(out).set_index("Date").sort_index()
-    return df_out
+    return pd.DataFrame(out).set_index("Date").sort_index()
 
 
 # ----------------------------
@@ -350,20 +346,40 @@ st.caption(
     "Prices are pulled via yfinance (auto-adjusted)."
 )
 
+# Fail fast if data files are missing (prevents Streamlit multiselect default errors)
+if not FF3_DAILY_PATH.exists():
+    st.error("Factor file not found. Ensure DATA/F-F_Research_Data_Factors_daily.csv exists in the repo.")
+    st.stop()
+
+if not SP500_PATH.exists():
+    st.error("SP500.csv not found. Ensure DATA/SP500.csv exists in the repo.")
+    st.stop()
+
 with st.sidebar:
     st.header("Inputs")
 
+    # Load S&P 500 universe
     try:
         sp500 = load_sp500_tickers_from_file(SP500_PATH)
-        st.success(f"Loaded {len(sp500):,} S&P 500 tickers from SP500.csv")
     except Exception as e:
-        sp500 = []
         st.error(f"Failed to load SP500.csv: {e}")
+        st.stop()
+
+    if not sp500:
+        st.error("SP500.csv loaded but produced 0 tickers. Check that it contains a Symbol/Ticker column.")
+        st.stop()
+
+    st.success(f"Loaded {len(sp500):,} S&P 500 tickers from SP500.csv")
+
+    # Ensure default values are always a subset of options
+    default_tickers = [t for t in DEFAULT_TICKERS if t in sp500]
+    if not default_tickers:
+        default_tickers = sp500[:3]
 
     tickers = st.multiselect(
         "Select S&P 500 tickers",
         options=sp500,
-        default=[t for t in DEFAULT_TICKERS if t in sp500] if sp500 else DEFAULT_TICKERS,
+        default=default_tickers,
         help="These options come from your SP500.csv file.",
     )
 
@@ -394,13 +410,13 @@ all_tickers = sorted(list(set(tickers + ([bench] if bench else []))))
 try:
     with st.spinner("Loading daily FF3 factors from local file..."):
         ff3_d = load_ff3_daily_from_kf_csv(FF3_DAILY_PATH)
-    st.caption(f"FF3 factor sample range: {ff3_d.index.min().date()} → {ff3_d.index.max().date()}")
 except Exception as e:
-    st.error(f"Could not load FF3 daily factors from:\n{FF3_DAILY_PATH}\n\nError: {e}")
+    st.error(f"Could not load FF3 daily factors from file. Error: {e}")
     st.stop()
 
-# Cap factors to the analysis end date
+# Cap factors to end date
 ff3_d = ff3_d.loc[ff3_d.index <= pd.to_datetime(END_DATE)]
+st.caption(f"FF3 factor sample range: {ff3_d.index.min().date()} → {ff3_d.index.max().date()}")
 
 # Load prices (yfinance)
 with st.spinner("Downloading price data (yfinance)..."):
@@ -433,14 +449,12 @@ if missing:
 if not available:
     st.error(
         "No price series were successfully downloaded. This is usually Yahoo rate limiting.\n\n"
-        "Fixes: wait 5–30 minutes and rerun, reduce the number of tickers, or switch data source."
+        "Fixes: wait and rerun, reduce tickers, or switch data source."
     )
     st.stop()
 
-# Only keep tickers we actually have
 all_tickers = available
 
-# If benchmark missing, note it
 if bench and bench not in all_tickers:
     st.info("Benchmark was not downloaded successfully and will be omitted from charts/tables.")
 
@@ -472,8 +486,6 @@ with tabs[0]:
 
     rows = []
     for t in all_tickers:
-        if t not in rets_d.columns:
-            continue
         r = rets_d[t].dropna()
         if r.empty:
             continue
@@ -518,7 +530,6 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("FF3 regression (daily excess returns)")
 
-    # Only allow tickers that actually exist in returns data
     ticker_options = [t for t in tickers if t in rets_d.columns]
     if not ticker_options:
         st.error("None of the selected tickers downloaded successfully. Try fewer tickers or rerun later.")
@@ -640,10 +651,11 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("Cross-ticker FF3 comparison")
 
+    ticker_options = [t for t in tickers if t in rets_d.columns]
     results: List[FF3Result] = []
     for t in ticker_options:
         s = rets_d[t].dropna()
-        r, m, _ = run_ff3_regression_daily(s.rename(t), ff3_d)
+        r, _, _ = run_ff3_regression_daily(s.rename(t), ff3_d)
         if r is not None:
             results.append(r)
 
